@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bottle Checker</title>
+
+    <style>
+        body {
+            font-family: Arial;
+            background: #f5f5f5;
+            padding: 40px;
+        }
+
+        .container {
+            max-width: 500px;
+            margin: auto;
+        }
+
+        .search-box, .manage-box {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        /* Flex layout to align input and scan button */
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            margin-bottom: 15px;
+        }
+
+        .input-group input {
+            flex: 1;
+            margin: 0; /* Override old margin */
+        }
+
+        .scan-btn {
+            width: auto;
+            padding: 0 15px;
+            background: #4caf50;
+        }
+
+        input {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            background: #1976d2;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            opacity: 0.9;
+        }
+
+        button.secondary {
+            background: #555;
+        }
+
+        button.small {
+            width: auto;
+            padding: 6px 10px;
+            font-size: 13px;
+        }
+
+        button.danger {
+            background: #d32f2f;
+        }
+
+        /* Scanner container styles */
+        .scanner-container {
+            display: none;
+            margin-bottom: 15px;
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid #ccc;
+        }
+
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: none;
+        }
+
+        .row {
+            margin-bottom: 10px;
+        }
+
+        .label {
+            font-weight: bold;
+        }
+
+        details summary {
+            cursor: pointer;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .two-col {
+            display: flex;
+            gap: 10px;
+        }
+
+        .two-col input {
+            flex: 1;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 6px 4px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .file-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .file-row button {
+            flex: 1;
+        }
+
+        #status {
+            font-size: 12px;
+            color: #777;
+            text-align: center;
+            margin-top: -10px;
+            margin-bottom: 15px;
+        }
+    </style>
+
+    <!-- Include Html5-Qrcode Library from CDN -->
+    <script src="html5-qrcode.min.js" type="text/javascript"></script>
+    <!-- sql.js: SQLite compiled to WebAssembly, runs entirely in the browser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+    <!-- Tesseract.js: OCR, used to read the number off a digital scale's display -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+    <div id="status">Loading database...</div>
+
+    <div class="search-box">
+        <h2>Bottle Weight Checker</h2>
+
+        <div class="input-group">
+            <input type="text" id="name" placeholder="Bottle name or barcode" oninput="checkOpticsNeeded()" onchange="checkOpticsNeeded()" />
+            <button type="button" class="scan-btn" onclick="toggleScanner('search')" id="scanToggleBtn-search">Scan</button>
+        </div>
+
+        <!-- Camera stream container -->
+        <div id="scanner-container-search" class="scanner-container">
+            <div id="interactive-search" style="width: 100%;"></div>
+        </div>
+
+        <div id="opticRow" style="display:none;">
+            <input type="number" id="opticWeightInput" placeholder="Optic weight (g) - this pour" />
+        </div>
+
+        <div class="input-group">
+            <input type="number" id="amount" placeholder="Current weight" />
+            <button type="button" class="scan-btn" onclick="toggleWeightScanner()" id="weightScanBtn">Read Scale</button>
+        </div>
+
+        <div class="scanner-container" id="scanner-container-weight">
+            <div style="position: relative;">
+                <video id="weight-video" style="width: 100%; display: block;" playsinline muted autoplay></video>
+                <div id="weight-guide-box" style="position: absolute; top: 32%; left: 10%; width: 80%; height: 36%; border: 2px solid #4caf50; pointer-events: none;"></div>
+            </div>
+            <div style="padding: 10px; background: #fafafa;">
+                <div id="weightScanStatus" style="font-size: 12px; color: #777; margin-bottom: 8px;">Align the scale's display inside the box, then capture.</div>
+                <button type="button" onclick="captureWeight()">Capture &amp; Read</button>
+            </div>
+        </div>
+        <canvas id="weight-canvas" style="display: none;"></canvas>
+
+        <button onclick="search()">Check Bottle</button>
+    </div>
+
+    <div class="card" id="resultCard">
+        <h3 id="productName"></h3>
+
+        <div class="row">
+            <span class="label">Current Weight:</span>
+            <span id="currentWeight"></span>
+        </div>
+
+        <div class="row">
+            <span class="label">Full Weight:</span>
+            <span id="fullWeight"></span>
+        </div>
+
+        <div class="row">
+            <span class="label">Empty Weight:</span>
+            <span id="emptyWeight"></span>
+        </div>
+
+        <div class="row">
+            <span class="label">Percentage Remaining:</span>
+            <span id="percentage"></span>
+        </div>
+
+        <div class="row">
+            <span class="label">Tots Remaining:</span>
+            <span id="tots"></span>
+        </div>
+
+        <div class="row" id="previousCountRow" style="display:none; border-top: 1px solid #eee; padding-top: 10px;">
+            <span class="label">Previous Count:</span>
+            <span id="previousCount"></span>
+        </div>
+
+        <div class="row" id="soldRow" style="display:none;">
+            <span class="label">Sold Since Last Count:</span>
+            <span id="soldSinceLast"></span>
+        </div>
+    </div>
+
+    <div class="manage-box">
+        <details id="manageDetails">
+            <summary>Manage Bottles</summary>
+
+            <input type="text" id="m_name" placeholder="Bottle name" />
+
+            <div class="input-group">
+                <input type="text" id="m_barcode" placeholder="Barcode (optional)" />
+                <button type="button" class="scan-btn" onclick="toggleScanner('manage')" id="scanToggleBtn-manage">Scan</button>
+            </div>
+
+            <div class="scanner-container" id="scanner-container-manage">
+                <div id="interactive-manage" style="width: 100%;"></div>
+            </div>
+
+            <div class="two-col">
+                <input type="number" id="m_full" placeholder="Full weight (g), no optics" />
+                <input type="number" id="m_empty" placeholder="Empty weight (g), no optics" />
+            </div>
+
+            <input type="number" id="m_tots" placeholder="Tots per full bottle" value="30" />
+
+            <div class="row" style="display:flex; align-items:center; gap:8px; margin-top:5px;">
+                <input type="checkbox" id="m_uses_optics" style="width:auto; margin:0;" onchange="toggleOpticWeightField()" />
+                <label for="m_uses_optics" style="font-weight:normal;">Checked with optics installed</label>
+            </div>
+
+            <input type="number" id="m_optic_weight" placeholder="Optic weight (g)" value="76" style="display:none;" />
+
+            <button onclick="saveBottle()">Save Bottle</button>
+
+            <h4 style="margin-top:20px;">Saved Bottles</h4>
+            <table id="bottleTable">
+                <thead>
+                    <tr><th>Name</th><th>Barcode</th><th>Full</th><th>Empty</th><th>Tots</th><th>Optic</th><th></th></tr>
+                </thead>
+                <tbody id="bottleTableBody"></tbody>
+            </table>
+
+            <h4 style="margin-top:20px;">Backup</h4>
+            <div class="file-row">
+                <button class="secondary" onclick="exportDb()">Export .sqlite</button>
+                <button class="secondary" onclick="document.getElementById('importFile').click()">Import .sqlite</button>
+            </div>
+            <input type="file" id="importFile" accept=".sqlite,.db" style="display:none" onchange="importDb(event)" />
+        </details>
+    </div>
+
+    <div class="manage-box">
+        <h3 style="margin-top:0;">Today's Sales</h3>
+        <p id="summaryEmpty" style="font-size:13px; color:#777;">No bottles checked yet today.</p>
+        <table id="summaryTable">
+            <thead>
+                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold</th></tr>
+            </thead>
+            <tbody id="summaryTableBody"></tbody>
+        </table>
+    </div>
+
+</div>
+
+<script>
+    // ---------------------------------------------------------------
+    // Database setup: sql.js (SQLite via WASM) persisted to IndexedDB
+    // ---------------------------------------------------------------
+    let SQL = null;
+    let db = null;
+    const IDB_NAME = 'barsheet-db';
+    const IDB_STORE = 'files';
+    const IDB_KEY = 'bottles.sqlite';
+
+    function idbOpen() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(IDB_NAME, 1);
+            req.onupgradeneeded = () => {
+                req.result.createObjectStore(IDB_STORE);
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function idbGet(key) {
+        const conn = await idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = conn.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(key);
+            req.onsuccess = () => resolve(req.result || null);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async function idbSet(key, value) {
+        const conn = await idbOpen();
+        return new Promise((resolve, reject) => {
+            const tx = conn.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).put(value, key);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    async function persist() {
+        const bytes = db.export();
+        await idbSet(IDB_KEY, bytes);
+    }
+
+    async function initDb() {
+        SQL = await initSqlJs({
+            locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+        });
+
+        const saved = await idbGet(IDB_KEY);
+
+        if (saved) {
+            db = new SQL.Database(new Uint8Array(saved));
+        } else {
+            db = new SQL.Database();
+            db.run(`
+                CREATE TABLE bottles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    barcode TEXT,
+                    full_weight REAL NOT NULL,
+                    empty_weight REAL NOT NULL,
+                    tots_capacity INTEGER NOT NULL DEFAULT 30,
+                    uses_optics INTEGER NOT NULL DEFAULT 0,
+                    optic_weight REAL NOT NULL DEFAULT 76
+                );
+            `);
+        }
+
+        // Add optics columns to databases created before this feature existed.
+        // ALTER TABLE throws if the column already exists, so these are safe
+        // to run every time - failures here just mean it was already added.
+        try { db.run(`ALTER TABLE bottles ADD COLUMN uses_optics INTEGER NOT NULL DEFAULT 0`); } catch (e) {}
+        try { db.run(`ALTER TABLE bottles ADD COLUMN optic_weight REAL NOT NULL DEFAULT 76`); } catch (e) {}
+
+        // Run on every load (including databases created before this feature existed)
+        // so existing bottle data is kept and the readings table is just added on top.
+        db.run(`
+            CREATE TABLE IF NOT EXISTS readings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bottle_id INTEGER NOT NULL,
+                reading_date TEXT NOT NULL,
+                current_weight REAL NOT NULL,
+                tots_remaining REAL NOT NULL,
+                UNIQUE(bottle_id, reading_date)
+            );
+        `);
+        await persist();
+
+        document.getElementById('status').innerText = 'Database ready (stored on this device)';
+        renderBottleTable();
+        renderDailySummary();
+    }
+
+    initDb().catch(err => {
+        document.getElementById('status').innerText = 'Failed to load database: ' + err.message;
+        console.error(err);
+    });
+
+    // ---------------------------------------------------------------
+    // Bottle management
+    // ---------------------------------------------------------------
+    function queryOne(sql, params) {
+        const stmt = db.prepare(sql);
+        stmt.bind(params);
+        let row = null;
+        if (stmt.step()) row = stmt.getAsObject();
+        stmt.free();
+        return row;
+    }
+
+    function queryAll(sql, params) {
+        const stmt = db.prepare(sql);
+        if (params) stmt.bind(params);
+        const rows = [];
+        while (stmt.step()) rows.push(stmt.getAsObject());
+        stmt.free();
+        return rows;
+    }
+
+    function findBottle(nameOrBarcode) {
+        return queryOne(
+            `SELECT * FROM bottles WHERE name = :q OR barcode = :q LIMIT 1`,
+            { ':q': nameOrBarcode }
+        );
+    }
+
+    // Shows/hides the "optic weight" field depending on whether the
+    // currently-entered bottle is checked with optics installed.
+    function checkOpticsNeeded() {
+        const nameVal = document.getElementById('name').value.trim();
+        const opticRow = document.getElementById('opticRow');
+        const opticInput = document.getElementById('opticWeightInput');
+
+        if (!db || !nameVal) {
+            opticRow.style.display = 'none';
+            return;
+        }
+
+        const bottle = findBottle(nameVal);
+
+        if (bottle && bottle.uses_optics) {
+            opticRow.style.display = 'block';
+            opticInput.value = bottle.optic_weight;
+        } else {
+            opticRow.style.display = 'none';
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Daily readings: one snapshot per bottle per day, so today's count
+    // can be compared against the most recent previous count.
+    // ---------------------------------------------------------------
+    function todayStr() {
+        return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    }
+
+    function getPreviousReading(bottleId, beforeDate) {
+        return queryOne(
+            `SELECT * FROM readings WHERE bottle_id = :b AND reading_date < :d ORDER BY reading_date DESC LIMIT 1`,
+            { ':b': bottleId, ':d': beforeDate }
+        );
+    }
+
+    async function recordReading(bottleId, currentWeight, totsRemaining) {
+        const date = todayStr();
+        db.run(
+            `INSERT INTO readings (bottle_id, reading_date, current_weight, tots_remaining)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(bottle_id, reading_date)
+             DO UPDATE SET current_weight = excluded.current_weight, tots_remaining = excluded.tots_remaining`,
+            [bottleId, date, currentWeight, totsRemaining]
+        );
+        await persist();
+    }
+
+    function renderDailySummary() {
+        const today = todayStr();
+        const rows = queryAll(
+            `SELECT r.bottle_id, r.tots_remaining as today_tots, b.name
+             FROM readings r JOIN bottles b ON b.id = r.bottle_id
+             WHERE r.reading_date = :d
+             ORDER BY b.name`,
+            { ':d': today }
+        );
+
+        const body = document.getElementById('summaryTableBody');
+        const emptyMsg = document.getElementById('summaryEmpty');
+        body.innerHTML = '';
+
+        if (rows.length === 0) {
+            emptyMsg.style.display = 'block';
+            return;
+        }
+        emptyMsg.style.display = 'none';
+
+        rows.forEach(r => {
+            const prev = getPreviousReading(r.bottle_id, today);
+            const tr = document.createElement('tr');
+
+            let prevText = 'No previous count';
+            let soldText = '-';
+
+            if (prev) {
+                prevText = prev.tots_remaining.toFixed(1);
+                const sold = prev.tots_remaining - r.today_tots;
+                soldText = sold.toFixed(1);
+            }
+
+            tr.innerHTML = `
+                <td>${r.name}</td>
+                <td>${prevText}</td>
+                <td>${r.today_tots.toFixed(1)}</td>
+                <td>${soldText}</td>
+            `;
+            body.appendChild(tr);
+        });
+    }
+
+    async function saveBottle() {
+        const name = document.getElementById('m_name').value.trim();
+        const barcode = document.getElementById('m_barcode').value.trim();
+        const full = parseFloat(document.getElementById('m_full').value);
+        const empty = parseFloat(document.getElementById('m_empty').value);
+        const tots = parseInt(document.getElementById('m_tots').value) || 30;
+        const usesOptics = document.getElementById('m_uses_optics').checked ? 1 : 0;
+        const opticWeight = parseFloat(document.getElementById('m_optic_weight').value) || 76;
+
+        if (!name || isNaN(full) || isNaN(empty)) {
+            alert('Please provide at least a name, full weight and empty weight');
+            return;
+        }
+        if (full <= empty) {
+            alert('Full weight must be greater than empty weight');
+            return;
+        }
+
+        const existing = queryOne(`SELECT id FROM bottles WHERE name = :n`, { ':n': name });
+
+        if (existing) {
+            db.run(
+                `UPDATE bottles SET barcode = ?, full_weight = ?, empty_weight = ?, tots_capacity = ?, uses_optics = ?, optic_weight = ? WHERE id = ?`,
+                [barcode, full, empty, tots, usesOptics, opticWeight, existing.id]
+            );
+        } else {
+            db.run(
+                `INSERT INTO bottles (name, barcode, full_weight, empty_weight, tots_capacity, uses_optics, optic_weight) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [name, barcode, full, empty, tots, usesOptics, opticWeight]
+            );
+        }
+
+        await persist();
+        renderBottleTable();
+
+        document.getElementById('m_name').value = '';
+        document.getElementById('m_barcode').value = '';
+        document.getElementById('m_full').value = '';
+        document.getElementById('m_empty').value = '';
+        document.getElementById('m_tots').value = '30';
+        document.getElementById('m_uses_optics').checked = false;
+        document.getElementById('m_optic_weight').value = '76';
+        toggleOpticWeightField();
+    }
+
+    function toggleOpticWeightField() {
+        const checked = document.getElementById('m_uses_optics').checked;
+        document.getElementById('m_optic_weight').style.display = checked ? 'block' : 'none';
+    }
+
+    async function deleteBottle(id) {
+        if (!confirm('Delete this bottle?')) return;
+        db.run(`DELETE FROM bottles WHERE id = ?`, [id]);
+        await persist();
+        renderBottleTable();
+    }
+
+    function editBottle(id) {
+        const b = queryOne(`SELECT * FROM bottles WHERE id = :id`, { ':id': id });
+        if (!b) return;
+        document.getElementById('m_name').value = b.name;
+        document.getElementById('m_barcode').value = b.barcode || '';
+        document.getElementById('m_full').value = b.full_weight;
+        document.getElementById('m_empty').value = b.empty_weight;
+        document.getElementById('m_tots').value = b.tots_capacity;
+        document.getElementById('m_uses_optics').checked = !!b.uses_optics;
+        document.getElementById('m_optic_weight').value = b.optic_weight;
+        toggleOpticWeightField();
+        document.getElementById('manageDetails').open = true;
+        window.scrollTo(0, document.getElementById('manageDetails').offsetTop);
+    }
+
+    function renderBottleTable() {
+        const rows = queryAll(`SELECT * FROM bottles ORDER BY name`);
+        const body = document.getElementById('bottleTableBody');
+        body.innerHTML = '';
+
+        rows.forEach(b => {
+            const tr = document.createElement('tr');
+            const opticText = b.uses_optics ? (b.optic_weight + 'g') : 'No';
+            tr.innerHTML = `
+                <td>${b.name}</td>
+                <td>${b.barcode || ''}</td>
+                <td>${b.full_weight}</td>
+                <td>${b.empty_weight}</td>
+                <td>${b.tots_capacity}</td>
+                <td>${opticText}</td>
+                <td>
+                    <button class="small secondary" onclick="editBottle(${b.id})">Edit</button>
+                    <button class="small danger" onclick="deleteBottle(${b.id})">Del</button>
+                </td>
+            `;
+            body.appendChild(tr);
+        });
+    }
+
+    // ---------------------------------------------------------------
+    // Export / import the raw .sqlite file (real portable backup)
+    // ---------------------------------------------------------------
+    function exportDb() {
+        const bytes = db.export();
+        const blob = new Blob([bytes], { type: 'application/x-sqlite3' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'bottles.sqlite';
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    async function importDb(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+        const buf = new Uint8Array(await file.arrayBuffer());
+        db = new SQL.Database(buf);
+        await persist();
+        renderBottleTable();
+        renderDailySummary();
+        document.getElementById('status').innerText = 'Database imported';
+    }
+
+    // ---------------------------------------------------------------
+    // Barcode scanner - shared between the search box and manage box
+    // ---------------------------------------------------------------
+    const scanners = {
+        search: { instance: null, targetInput: 'name', containerId: 'scanner-container-search', videoDivId: 'interactive-search', btnId: 'scanToggleBtn-search' },
+        manage: { instance: null, targetInput: 'm_barcode', containerId: 'scanner-container-manage', videoDivId: 'interactive-manage', btnId: 'scanToggleBtn-manage' }
+    };
+
+    function toggleScanner(which) {
+        const s = scanners[which];
+
+        if (s.instance && s.instance.isScanning) {
+            stopScanner(which);
+            return;
+        }
+
+        // Stop the other scanner if it's running, only one camera at a time
+        Object.keys(scanners).forEach(key => {
+            if (key !== which && scanners[key].instance && scanners[key].instance.isScanning) {
+                stopScanner(key);
+            }
+        });
+
+        const container = document.getElementById(s.containerId);
+        const btn = document.getElementById(s.btnId);
+
+        container.style.display = 'block';
+        btn.innerText = 'Close';
+        btn.style.background = '#d32f2f';
+
+        s.instance = new Html5Qrcode(s.videoDivId);
+
+        s.instance.start(
+            { facingMode: "environment" },
+            {
+                fps: 10,
+                qrbox: { width: 250, height: 150 }
+            },
+            (decodedText) => {
+                document.getElementById(s.targetInput).value = decodedText;
+                stopScanner(which);
+                if (which === 'search') {
+                    checkOpticsNeeded();
+                    if (document.getElementById("amount").value) {
+                        search();
+                    }
+                }
+            },
+            (errorMessage) => {
+                // Keep this silent to prevent spamming errors on every video frame
+            }
+        ).catch((err) => {
+            alert("Camera initialization failed! Reason: " + err);
+            console.error("Scanner Error: ", err);
+            stopScanner(which);
+        });
+    }
+
+    function stopScanner(which) {
+        const s = scanners[which];
+        const container = document.getElementById(s.containerId);
+        const btn = document.getElementById(s.btnId);
+
+        if (s.instance) {
+            s.instance.stop().then(() => {
+                container.style.display = 'none';
+                btn.innerText = 'Scan';
+                btn.style.background = '#4caf50';
+            }).catch(err => console.error(err));
+        } else {
+            container.style.display = 'none';
+            btn.innerText = 'Scan';
+            btn.style.background = '#4caf50';
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Scale reading via camera + OCR (Tesseract.js) - reads the number
+    // straight off a digital scale's display instead of typing it in.
+    // ---------------------------------------------------------------
+    let weightStream = null;
+    let tesseractWorker = null;
+
+    async function getOcrWorker() {
+        if (!tesseractWorker) {
+            tesseractWorker = await Tesseract.createWorker('eng');
+            await tesseractWorker.setParameters({
+                tessedit_char_whitelist: '0123456789.-'
+            });
+        }
+        return tesseractWorker;
+    }
+
+    async function toggleWeightScanner() {
+        const container = document.getElementById('scanner-container-weight');
+        const btn = document.getElementById('weightScanBtn');
+
+        if (weightStream) {
+            stopWeightScanner();
+            return;
+        }
+
+        try {
+            weightStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        } catch (err) {
+            alert('Camera initialization failed: ' + err.message);
+            return;
+        }
+
+        document.getElementById('weight-video').srcObject = weightStream;
+        container.style.display = 'block';
+        btn.innerText = 'Close';
+        btn.style.background = '#d32f2f';
+        document.getElementById('weightScanStatus').innerText = "Align the scale's display inside the box, then capture.";
+    }
+
+    function stopWeightScanner() {
+        const container = document.getElementById('scanner-container-weight');
+        const btn = document.getElementById('weightScanBtn');
+
+        if (weightStream) {
+            weightStream.getTracks().forEach(t => t.stop());
+            weightStream = null;
+        }
+
+        container.style.display = 'none';
+        btn.innerText = 'Read Scale';
+        btn.style.background = '#4caf50';
+    }
+
+    async function captureWeight() {
+        const video = document.getElementById('weight-video');
+        const guideBox = document.getElementById('weight-guide-box');
+        const statusEl = document.getElementById('weightScanStatus');
+
+        if (!video.videoWidth) {
+            alert('Camera not ready yet, try again in a moment');
+            return;
+        }
+
+        statusEl.innerText = 'Reading...';
+
+        // Map the on-screen guide box to actual video pixel coordinates,
+        // so we only OCR the cropped display area, not the whole frame.
+        const videoRect = video.getBoundingClientRect();
+        const boxRect = guideBox.getBoundingClientRect();
+
+        const scaleX = video.videoWidth / videoRect.width;
+        const scaleY = video.videoHeight / videoRect.height;
+
+        const sx = (boxRect.left - videoRect.left) * scaleX;
+        const sy = (boxRect.top - videoRect.top) * scaleY;
+        const sw = boxRect.width * scaleX;
+        const sh = boxRect.height * scaleY;
+
+        const canvas = document.getElementById('weight-canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+
+        // Simple preprocessing: grayscale + threshold, helps OCR read
+        // a digit display much more reliably than a raw camera frame.
+        const imageData = ctx.getImageData(0, 0, sw, sh);
+        const data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = 0.3 * data[i] + 0.59 * data[i + 1] + 0.11 * data[i + 2];
+            const value = gray > 130 ? 255 : 0;
+            data[i] = data[i + 1] = data[i + 2] = value;
+        }
+        ctx.putImageData(imageData, 0, 0);
+
+        try {
+            const worker = await getOcrWorker();
+            const { data: { text } } = await worker.recognize(canvas);
+            const cleaned = text.replace(/[^0-9.\-]/g, '').trim();
+            const value = parseFloat(cleaned);
+
+            if (isNaN(value)) {
+                statusEl.innerText = "Couldn't read a number - try moving closer, improving lighting, or adjusting the box, then capture again.";
+                return;
+            }
+
+            document.getElementById('amount').value = value;
+            statusEl.innerText = 'Read ' + value + ' - check it matches the scale before continuing.';
+            stopWeightScanner();
+
+            if (document.getElementById('name').value.trim()) {
+                search();
+            }
+        } catch (err) {
+            statusEl.innerText = 'OCR failed: ' + err.message;
+            console.error(err);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Search: replaces the old fetch() call to the external API
+    // ---------------------------------------------------------------
+    async function search() {
+        if (!db) {
+            alert('Database is still loading, try again in a moment');
+            return;
+        }
+
+        const name = document.getElementById("name").value.trim();
+        const currentWeight = parseFloat(document.getElementById("amount").value);
+
+        if (!name || isNaN(currentWeight)) {
+            alert("Please fill in both fields");
+            return;
+        }
+
+        const bottle = findBottle(name);
+
+        if (!bottle) {
+            alert("Bottle not found. Add it under 'Manage Bottles' first.");
+            return;
+        }
+
+        let adjustedWeight = currentWeight;
+        let opticWeightUsed = null;
+
+        if (bottle.uses_optics) {
+            const opticInputVal = parseFloat(document.getElementById('opticWeightInput').value);
+            opticWeightUsed = isNaN(opticInputVal) ? bottle.optic_weight : opticInputVal;
+            adjustedWeight = currentWeight - opticWeightUsed;
+        }
+
+        const fullAlcoholWeight = bottle.full_weight - bottle.empty_weight;
+        const remainingAlcoholWeight = adjustedWeight - bottle.empty_weight;
+
+        let percentageRemaining = (remainingAlcoholWeight / fullAlcoholWeight) * 100;
+        let totsRemaining = (remainingAlcoholWeight / fullAlcoholWeight) * bottle.tots_capacity;
+
+        // Clamp to sane bounds in case of a scale reading below empty or above full
+        percentageRemaining = Math.max(0, Math.min(100, percentageRemaining));
+        totsRemaining = Math.max(0, Math.min(bottle.tots_capacity, totsRemaining));
+
+        // Look up the most recent count before today, then save today's count
+        const previous = getPreviousReading(bottle.id, todayStr());
+        await recordReading(bottle.id, adjustedWeight, totsRemaining);
+
+        document.getElementById("resultCard").style.display = "block";
+
+        document.getElementById("productName").innerText = bottle.name;
+        document.getElementById("currentWeight").innerText =
+            opticWeightUsed !== null
+                ? currentWeight + ' (optic ' + opticWeightUsed + 'g subtracted = ' + adjustedWeight.toFixed(1) + ')'
+                : currentWeight;
+        document.getElementById("fullWeight").innerText = bottle.full_weight;
+        document.getElementById("emptyWeight").innerText = bottle.empty_weight;
+        document.getElementById("percentage").innerText = percentageRemaining.toFixed(1) + "%";
+        document.getElementById("tots").innerText = totsRemaining.toFixed(1);
+
+        if (previous) {
+            const sold = previous.tots_remaining - totsRemaining;
+            document.getElementById("previousCountRow").style.display = "block";
+            document.getElementById("soldRow").style.display = "block";
+            document.getElementById("previousCount").innerText =
+                previous.tots_remaining.toFixed(1) + ' (on ' + previous.reading_date + ')';
+            document.getElementById("soldSinceLast").innerText = sold.toFixed(1) + ' tots';
+        } else {
+            document.getElementById("previousCountRow").style.display = "block";
+            document.getElementById("soldRow").style.display = "block";
+            document.getElementById("previousCount").innerText = 'No previous count yet';
+            document.getElementById("soldSinceLast").innerText = '-';
+        }
+
+        renderDailySummary();
+    }
+</script>
+
+</body>
+</html>
