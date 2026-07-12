@@ -287,14 +287,44 @@
     </div>
 
     <div class="manage-box">
+        <details id="settingsDetails">
+            <summary>Settings</summary>
+            <div class="row" style="display:flex; align-items:center; gap:8px;">
+                <input type="checkbox" id="keepHistoryToggle" style="width:auto; margin:0;" onchange="toggleKeepHistory()" />
+                <label for="keepHistoryToggle" style="font-weight:normal;">Keep daily count history (uses more storage on this device)</label>
+            </div>
+            <p style="font-size:12px; color:#777; margin-top:5px;">
+                When off, only each bottle's latest count is kept - older daily readings are removed to save space.
+            </p>
+        </details>
+    </div>
+
+    <div class="manage-box">
         <h3 style="margin-top:0;">Today's Sales</h3>
         <p id="summaryEmpty" style="font-size:13px; color:#777;">No bottles checked yet today.</p>
         <table id="summaryTable">
             <thead>
-                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold</th></tr>
+                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold</th><th>Actual Sales</th><th>Loss</th></tr>
             </thead>
             <tbody id="summaryTableBody"></tbody>
         </table>
+    </div>
+
+    <div class="manage-box">
+        <details id="historyDetails">
+            <summary>History</summary>
+            <p id="historyOffNote" style="font-size:12px; color:#777; display:none;">
+                Daily history is currently off, so only the latest count per bottle is kept. Turn it on under Settings to build up a browsable history.
+            </p>
+            <p id="historyEmpty" style="font-size:13px; color:#777;">No bottles saved yet.</p>
+            <select id="historyBottleSelect" onchange="renderHistoryTable()"></select>
+            <table id="historyTable" style="display:none;">
+                <thead>
+                    <tr><th>Date</th><th>Weight</th><th>Tots</th><th>Sold</th><th>Actual Sales</th><th>Loss</th></tr>
+                </thead>
+                <tbody id="historyTableBody"></tbody>
+            </table>
+        </details>
     </div>
 
 </div>
@@ -385,14 +415,25 @@
                 reading_date TEXT NOT NULL,
                 current_weight REAL NOT NULL,
                 tots_remaining REAL NOT NULL,
+                sales_qty REAL,
                 UNIQUE(bottle_id, reading_date)
+            );
+        `);
+        try { db.run(`ALTER TABLE readings ADD COLUMN sales_qty REAL`); } catch (e) {}
+
+        db.run(`
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
         `);
         await persist();
 
         document.getElementById('status').innerText = 'Database ready (stored on this device)';
+        document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
         renderBottleTable();
         renderDailySummary();
+        renderHistorySelect();
     }
 
     initDb().catch(err => {
@@ -426,6 +467,50 @@
             `SELECT * FROM bottles WHERE name = :q OR barcode = :q LIMIT 1`,
             { ':q': nameOrBarcode }
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Settings: simple key/value store, e.g. whether to keep every
+    // day's reading (more storage used) or just the latest per bottle.
+    // ---------------------------------------------------------------
+    function getSetting(key, defaultValue) {
+        const row = queryOne(`SELECT value FROM settings WHERE key = :k`, { ':k': key });
+        return row ? row.value : defaultValue;
+    }
+
+    function setSetting(key, value) {
+        db.run(
+            `INSERT INTO settings (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+            [key, value]
+        );
+    }
+
+    function keepHistoryEnabled() {
+        return getSetting('keep_history', '1') === '1';
+    }
+
+    async function toggleKeepHistory() {
+        const checkbox = document.getElementById('keepHistoryToggle');
+
+        if (!checkbox.checked) {
+            const ok = confirm("Turning this off deletes all stored daily history now, keeping only each bottle's latest count. This can't be undone. Continue?");
+            if (!ok) {
+                checkbox.checked = true;
+                return;
+            }
+            db.run(`
+                DELETE FROM readings
+                WHERE reading_date < (
+                    SELECT MAX(reading_date) FROM readings r2 WHERE r2.bottle_id = readings.bottle_id
+                )
+            `);
+        }
+
+        setSetting('keep_history', checkbox.checked ? '1' : '0');
+        await persist();
+        renderDailySummary();
+        renderHistoryTable();
     }
 
     // Shows/hides the "optic weight" field depending on whether the
@@ -474,13 +559,38 @@
              DO UPDATE SET current_weight = excluded.current_weight, tots_remaining = excluded.tots_remaining`,
             [bottleId, date, currentWeight, totsRemaining]
         );
+
+        if (!keepHistoryEnabled()) {
+            db.run(
+                `DELETE FROM readings WHERE bottle_id = ? AND reading_date < (
+                    SELECT MAX(reading_date) FROM readings WHERE bottle_id = ?
+                )`,
+                [bottleId, bottleId]
+            );
+        }
+
         await persist();
+    }
+
+    // Actual sales are entered manually (e.g. from a till/POS) so the
+    // weight-calculated "sold" figure can be checked for a loss (spillage,
+    // over-pouring, theft) - loss = calculated sold minus actual sales.
+    async function updateSummarySales(bottleId, value) {
+        const val = parseFloat(value);
+        const salesQty = isNaN(val) ? null : val;
+        db.run(
+            `UPDATE readings SET sales_qty = ? WHERE bottle_id = ? AND reading_date = ?`,
+            [salesQty, bottleId, todayStr()]
+        );
+        await persist();
+        renderDailySummary();
+        renderHistoryTable();
     }
 
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
-            `SELECT r.bottle_id, r.tots_remaining as today_tots, b.name
+            `SELECT r.bottle_id, r.tots_remaining as today_tots, r.sales_qty, b.name
              FROM readings r JOIN bottles b ON b.id = r.bottle_id
              WHERE r.reading_date = :d
              ORDER BY b.name`,
@@ -503,11 +613,18 @@
 
             let prevText = 'No previous count';
             let soldText = '-';
+            let lossText = '-';
+            let sold = null;
 
             if (prev) {
                 prevText = prev.tots_remaining.toFixed(1);
-                const sold = prev.tots_remaining - r.today_tots;
+                sold = prev.tots_remaining - r.today_tots;
                 soldText = sold.toFixed(1);
+            }
+
+            const salesVal = (r.sales_qty !== null && r.sales_qty !== undefined) ? r.sales_qty : '';
+            if (sold !== null && salesVal !== '') {
+                lossText = (sold - salesVal).toFixed(1);
             }
 
             tr.innerHTML = `
@@ -515,6 +632,8 @@
                 <td>${prevText}</td>
                 <td>${r.today_tots.toFixed(1)}</td>
                 <td>${soldText}</td>
+                <td><input type="number" value="${salesVal}" placeholder="tots" style="width:70px; margin:0; padding:4px;" onchange="updateSummarySales(${r.bottle_id}, this.value)" /></td>
+                <td>${lossText}</td>
             `;
             body.appendChild(tr);
         });
@@ -554,6 +673,7 @@
 
         await persist();
         renderBottleTable();
+        renderHistorySelect();
 
         document.getElementById('m_name').value = '';
         document.getElementById('m_barcode').value = '';
@@ -575,6 +695,7 @@
         db.run(`DELETE FROM bottles WHERE id = ?`, [id]);
         await persist();
         renderBottleTable();
+        renderHistorySelect();
     }
 
     function editBottle(id) {
@@ -617,6 +738,93 @@
     }
 
     // ---------------------------------------------------------------
+    // History: browse every stored daily reading for one bottle (only
+    // has more than the latest row when "keep daily history" is on).
+    // ---------------------------------------------------------------
+    function renderHistorySelect() {
+        const bottles = queryAll(`SELECT id, name FROM bottles ORDER BY name`);
+        const select = document.getElementById('historyBottleSelect');
+        const emptyMsg = document.getElementById('historyEmpty');
+        const prevSelected = select.value;
+        select.innerHTML = '';
+
+        if (bottles.length === 0) {
+            emptyMsg.style.display = 'block';
+            select.style.display = 'none';
+            document.getElementById('historyTable').style.display = 'none';
+            return;
+        }
+
+        emptyMsg.style.display = 'none';
+        select.style.display = 'block';
+
+        bottles.forEach(b => {
+            const opt = document.createElement('option');
+            opt.value = b.id;
+            opt.innerText = b.name;
+            select.appendChild(opt);
+        });
+
+        if (prevSelected && bottles.some(b => String(b.id) === prevSelected)) {
+            select.value = prevSelected;
+        }
+
+        renderHistoryTable();
+    }
+
+    function renderHistoryTable() {
+        document.getElementById('historyOffNote').style.display = keepHistoryEnabled() ? 'none' : 'block';
+
+        const select = document.getElementById('historyBottleSelect');
+        const table = document.getElementById('historyTable');
+        const body = document.getElementById('historyTableBody');
+
+        if (!select.value) {
+            table.style.display = 'none';
+            return;
+        }
+
+        const bottleId = parseInt(select.value);
+        const rows = queryAll(
+            `SELECT * FROM readings WHERE bottle_id = :b ORDER BY reading_date DESC`,
+            { ':b': bottleId }
+        );
+
+        body.innerHTML = '';
+
+        if (rows.length === 0) {
+            table.style.display = 'none';
+            return;
+        }
+        table.style.display = 'table';
+
+        rows.forEach((r, i) => {
+            const prev = rows[i + 1]; // next row is the previous day (rows are newest-first)
+            let soldText = '-';
+            let lossText = '-';
+
+            if (prev) {
+                const sold = prev.tots_remaining - r.tots_remaining;
+                soldText = sold.toFixed(1);
+                if (r.sales_qty !== null && r.sales_qty !== undefined) {
+                    lossText = (sold - r.sales_qty).toFixed(1);
+                }
+            }
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${r.reading_date}</td>
+                <td>${r.current_weight}</td>
+                <td>${r.tots_remaining.toFixed(1)}</td>
+                <td>${soldText}</td>
+                <td>${r.sales_qty !== null && r.sales_qty !== undefined ? r.sales_qty : '-'}</td>
+                <td>${lossText}</td>
+            `;
+            body.appendChild(tr);
+        });
+    }
+
+    // ---------------------------------------------------------------
     // Export / import the raw .sqlite file (real portable backup)
     // ---------------------------------------------------------------
     function exportDb() {
@@ -635,9 +843,11 @@
         if (!file) return;
         const buf = new Uint8Array(await file.arrayBuffer());
         db = new SQL.Database(buf);
+        document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
         await persist();
         renderBottleTable();
         renderDailySummary();
+        renderHistorySelect();
         document.getElementById('status').innerText = 'Database imported';
     }
 
@@ -911,6 +1121,7 @@
         }
 
         renderDailySummary();
+        renderHistoryTable();
     }
 </script>
 
