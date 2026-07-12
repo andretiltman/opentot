@@ -400,6 +400,21 @@
             `);
         }
 
+        ensureSchema();
+        await persist();
+
+        document.getElementById('status').innerText = 'Database ready (stored on this device)';
+        document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
+        renderBottleTable();
+        renderDailySummary();
+        renderHistorySelect();
+    }
+
+    // Brings any database - freshly created, loaded from IndexedDB, or
+    // imported from a .sqlite backup - up to the current schema. Safe to
+    // run repeatedly: ALTER TABLE failures just mean a column already exists,
+    // and the readings rebuild only runs when reading_time is missing.
+    function ensureSchema() {
         // Add optics columns to databases created before this feature existed.
         // ALTER TABLE throws if the column already exists, so these are safe
         // to run every time - failures here just mean it was already added.
@@ -408,18 +423,46 @@
 
         // Run on every load (including databases created before this feature existed)
         // so existing bottle data is kept and the readings table is just added on top.
+        // No UNIQUE(bottle_id, reading_date) here - day and night staff both need to
+        // save their own count on the same day, so multiple readings per day are allowed.
         db.run(`
             CREATE TABLE IF NOT EXISTS readings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bottle_id INTEGER NOT NULL,
                 reading_date TEXT NOT NULL,
+                reading_time TEXT NOT NULL,
                 current_weight REAL NOT NULL,
                 tots_remaining REAL NOT NULL,
-                sales_qty REAL,
-                UNIQUE(bottle_id, reading_date)
+                sales_qty REAL
             );
         `);
         try { db.run(`ALTER TABLE readings ADD COLUMN sales_qty REAL`); } catch (e) {}
+
+        // Databases from before multiple-readings-per-day support have a
+        // UNIQUE(bottle_id, reading_date) constraint and no reading_time column.
+        // SQLite can't drop a constraint in place, so rebuild the table instead;
+        // existing rows get a reading_time synthesized from their date.
+        const readingsColumns = queryAll(`PRAGMA table_info(readings)`).map(c => c.name);
+        if (!readingsColumns.includes('reading_time')) {
+            db.run(`
+                CREATE TABLE readings_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bottle_id INTEGER NOT NULL,
+                    reading_date TEXT NOT NULL,
+                    reading_time TEXT NOT NULL,
+                    current_weight REAL NOT NULL,
+                    tots_remaining REAL NOT NULL,
+                    sales_qty REAL
+                );
+            `);
+            db.run(`
+                INSERT INTO readings_new (id, bottle_id, reading_date, reading_time, current_weight, tots_remaining, sales_qty)
+                SELECT id, bottle_id, reading_date, reading_date || 'T00:00:00.000Z', current_weight, tots_remaining, sales_qty
+                FROM readings;
+            `);
+            db.run(`DROP TABLE readings;`);
+            db.run(`ALTER TABLE readings_new RENAME TO readings;`);
+        }
 
         db.run(`
             CREATE TABLE IF NOT EXISTS settings (
@@ -427,13 +470,6 @@
                 value TEXT
             );
         `);
-        await persist();
-
-        document.getElementById('status').innerText = 'Database ready (stored on this device)';
-        document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
-        renderBottleTable();
-        renderDailySummary();
-        renderHistorySelect();
     }
 
     initDb().catch(err => {
@@ -501,8 +537,8 @@
             }
             db.run(`
                 DELETE FROM readings
-                WHERE reading_date < (
-                    SELECT MAX(reading_date) FROM readings r2 WHERE r2.bottle_id = readings.bottle_id
+                WHERE reading_time < (
+                    SELECT MAX(reading_time) FROM readings r2 WHERE r2.bottle_id = readings.bottle_id
                 )
             `);
         }
@@ -536,34 +572,42 @@
     }
 
     // ---------------------------------------------------------------
-    // Daily readings: one snapshot per bottle per day, so today's count
-    // can be compared against the most recent previous count.
+    // Readings: every check is saved as its own record (day shift and
+    // night shift can both count the same bottle on the same day), and
+    // each one is compared against whichever reading came right before
+    // it - same day or not.
     // ---------------------------------------------------------------
-    function todayStr() {
-        return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    function nowParts() {
+        const d = new Date();
+        return { date: d.toISOString().slice(0, 10), time: d.toISOString() };
     }
 
-    function getPreviousReading(bottleId, beforeDate) {
+    function todayStr() {
+        return nowParts().date;
+    }
+
+    function formatTime(isoTime) {
+        return new Date(isoTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
+    function getPreviousReading(bottleId, beforeTime) {
         return queryOne(
-            `SELECT * FROM readings WHERE bottle_id = :b AND reading_date < :d ORDER BY reading_date DESC LIMIT 1`,
-            { ':b': bottleId, ':d': beforeDate }
+            `SELECT * FROM readings WHERE bottle_id = :b AND reading_time < :t ORDER BY reading_time DESC LIMIT 1`,
+            { ':b': bottleId, ':t': beforeTime }
         );
     }
 
-    async function recordReading(bottleId, currentWeight, totsRemaining) {
-        const date = todayStr();
+    async function recordReading(bottleId, currentWeight, totsRemaining, date, time) {
         db.run(
-            `INSERT INTO readings (bottle_id, reading_date, current_weight, tots_remaining)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(bottle_id, reading_date)
-             DO UPDATE SET current_weight = excluded.current_weight, tots_remaining = excluded.tots_remaining`,
-            [bottleId, date, currentWeight, totsRemaining]
+            `INSERT INTO readings (bottle_id, reading_date, reading_time, current_weight, tots_remaining)
+             VALUES (?, ?, ?, ?, ?)`,
+            [bottleId, date, time, currentWeight, totsRemaining]
         );
 
         if (!keepHistoryEnabled()) {
             db.run(
-                `DELETE FROM readings WHERE bottle_id = ? AND reading_date < (
-                    SELECT MAX(reading_date) FROM readings WHERE bottle_id = ?
+                `DELETE FROM readings WHERE bottle_id = ? AND reading_time < (
+                    SELECT MAX(reading_time) FROM readings WHERE bottle_id = ?
                 )`,
                 [bottleId, bottleId]
             );
@@ -575,13 +619,12 @@
     // Actual sales are entered manually (e.g. from a till/POS) so the
     // weight-calculated "sold" figure can be checked for a loss (spillage,
     // over-pouring, theft) - loss = calculated sold minus actual sales.
-    async function updateSummarySales(bottleId, value) {
+    // Keyed by reading id, not bottle+date, since a bottle can have more
+    // than one reading (and more than one sales figure) on the same day.
+    async function updateSummarySales(readingId, value) {
         const val = parseFloat(value);
         const salesQty = isNaN(val) ? null : val;
-        db.run(
-            `UPDATE readings SET sales_qty = ? WHERE bottle_id = ? AND reading_date = ?`,
-            [salesQty, bottleId, todayStr()]
-        );
+        db.run(`UPDATE readings SET sales_qty = ? WHERE id = ?`, [salesQty, readingId]);
         await persist();
         renderDailySummary();
         renderHistoryTable();
@@ -590,10 +633,10 @@
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
-            `SELECT r.bottle_id, r.tots_remaining as today_tots, r.sales_qty, b.name
+            `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, r.sales_qty, b.name
              FROM readings r JOIN bottles b ON b.id = r.bottle_id
              WHERE r.reading_date = :d
-             ORDER BY b.name`,
+             ORDER BY b.name, r.reading_time`,
             { ':d': today }
         );
 
@@ -608,7 +651,7 @@
         emptyMsg.style.display = 'none';
 
         rows.forEach(r => {
-            const prev = getPreviousReading(r.bottle_id, today);
+            const prev = getPreviousReading(r.bottle_id, r.reading_time);
             const tr = document.createElement('tr');
 
             let prevText = 'No previous count';
@@ -617,7 +660,7 @@
             let sold = null;
 
             if (prev) {
-                prevText = prev.tots_remaining.toFixed(1);
+                prevText = prev.tots_remaining.toFixed(1) + ' (' + prev.reading_date + ' ' + formatTime(prev.reading_time) + ')';
                 sold = prev.tots_remaining - r.today_tots;
                 soldText = sold.toFixed(1);
             }
@@ -628,11 +671,11 @@
             }
 
             tr.innerHTML = `
-                <td>${r.name}</td>
+                <td>${r.name} <span style="color:#999;">(${formatTime(r.reading_time)})</span></td>
                 <td>${prevText}</td>
                 <td>${r.today_tots.toFixed(1)}</td>
                 <td>${soldText}</td>
-                <td><input type="number" value="${salesVal}" placeholder="tots" style="width:70px; margin:0; padding:4px;" onchange="updateSummarySales(${r.bottle_id}, this.value)" /></td>
+                <td><input type="number" value="${salesVal}" placeholder="tots" style="width:70px; margin:0; padding:4px;" onchange="updateSummarySales(${r.id}, this.value)" /></td>
                 <td>${lossText}</td>
             `;
             body.appendChild(tr);
@@ -786,7 +829,7 @@
 
         const bottleId = parseInt(select.value);
         const rows = queryAll(
-            `SELECT * FROM readings WHERE bottle_id = :b ORDER BY reading_date DESC`,
+            `SELECT * FROM readings WHERE bottle_id = :b ORDER BY reading_time DESC`,
             { ':b': bottleId }
         );
 
@@ -799,7 +842,7 @@
         table.style.display = 'table';
 
         rows.forEach((r, i) => {
-            const prev = rows[i + 1]; // next row is the previous day (rows are newest-first)
+            const prev = rows[i + 1]; // next row is the previous reading (rows are newest-first)
             let soldText = '-';
             let lossText = '-';
 
@@ -813,7 +856,7 @@
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${r.reading_date}</td>
+                <td>${r.reading_date} ${formatTime(r.reading_time)}</td>
                 <td>${r.current_weight}</td>
                 <td>${r.tots_remaining.toFixed(1)}</td>
                 <td>${soldText}</td>
@@ -843,6 +886,7 @@
         if (!file) return;
         const buf = new Uint8Array(await file.arrayBuffer());
         db = new SQL.Database(buf);
+        ensureSchema();
         document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
         await persist();
         renderBottleTable();
@@ -1090,9 +1134,12 @@
         percentageRemaining = Math.max(0, Math.min(100, percentageRemaining));
         totsRemaining = Math.max(0, Math.min(bottle.tots_capacity, totsRemaining));
 
-        // Look up the most recent count before today, then save today's count
-        const previous = getPreviousReading(bottle.id, todayStr());
-        await recordReading(bottle.id, adjustedWeight, totsRemaining);
+        // Look up the most recent count before now (could be earlier today, e.g.
+        // day shift vs night shift, or an earlier day), then save this count as
+        // its own record - it never overwrites an earlier count from today.
+        const { date, time } = nowParts();
+        const previous = getPreviousReading(bottle.id, time);
+        await recordReading(bottle.id, adjustedWeight, totsRemaining, date, time);
 
         document.getElementById("resultCard").style.display = "block";
 
@@ -1111,7 +1158,7 @@
             document.getElementById("previousCountRow").style.display = "block";
             document.getElementById("soldRow").style.display = "block";
             document.getElementById("previousCount").innerText =
-                previous.tots_remaining.toFixed(1) + ' (on ' + previous.reading_date + ')';
+                previous.tots_remaining.toFixed(1) + ' (on ' + previous.reading_date + ' ' + formatTime(previous.reading_time) + ')';
             document.getElementById("soldSinceLast").innerText = sold.toFixed(1) + ' tots';
         } else {
             document.getElementById("previousCountRow").style.display = "block";
