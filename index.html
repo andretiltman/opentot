@@ -630,13 +630,20 @@
         renderHistoryTable();
     }
 
+    // Shows just each bottle's most recent count for today - if day and
+    // night shift both counted it, only the latest appears here (earlier
+    // counts from today are still kept and viewable under History).
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
             `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, r.sales_qty, b.name
              FROM readings r JOIN bottles b ON b.id = r.bottle_id
              WHERE r.reading_date = :d
-             ORDER BY b.name, r.reading_time`,
+             AND r.reading_time = (
+                 SELECT MAX(r2.reading_time) FROM readings r2
+                 WHERE r2.bottle_id = r.bottle_id AND r2.reading_date = :d
+             )
+             ORDER BY b.name`,
             { ':d': today }
         );
 
