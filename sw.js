@@ -1,5 +1,5 @@
 // Bump this on every deploy that changes cached files, so old caches get cleared.
-const CACHE_NAME = 'bottle-checker-v1';
+const CACHE_NAME = 'opentot-v1';
 
 const APP_SHELL = [
     './',

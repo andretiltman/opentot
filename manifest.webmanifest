@@ -1,6 +1,6 @@
 {
-  "name": "Bottle Checker",
-  "short_name": "Bottle Checker",
+  "name": "OpenTot",
+  "short_name": "OpenTot",
   "description": "Open Source Tot Measurement System - uses bottle weight to determine the remaining tots",
   "start_url": "./index.html",
   "scope": "./",
