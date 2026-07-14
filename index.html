@@ -696,6 +696,18 @@
         );
     }
 
+    // Today's Sales needs the stock level the day *started* at, not just
+    // whatever reading happened to come before it - a stock take can happen
+    // at any time of day, so "the previous reading" might itself be from
+    // earlier today. This looks back to the last reading from a prior day
+    // (skipping back further if the previous day had no reading at all).
+    function getLastReadingBeforeDate(bottleId, date) {
+        return queryOne(
+            `SELECT * FROM readings WHERE bottle_id = :b AND reading_date < :d ORDER BY reading_date DESC, reading_time DESC LIMIT 1`,
+            { ':b': bottleId, ':d': date }
+        );
+    }
+
     async function recordReading(bottleId, currentWeight, totsRemaining, date, time) {
         db.run(
             `INSERT INTO readings (bottle_id, reading_date, reading_time, current_weight, tots_remaining)
@@ -732,6 +744,9 @@
     // Shows just each bottle's most recent count for today - if day and
     // night shift both counted it, only the latest appears here (earlier
     // counts from today are still kept and viewable under History).
+    // "Sold" is measured against the last reading from a previous day, not
+    // an earlier count from today, since a stock take can happen at any
+    // time of day.
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
@@ -757,7 +772,7 @@
         emptyMsg.style.display = 'none';
 
         rows.forEach(r => {
-            const prev = getPreviousReading(r.bottle_id, r.reading_time);
+            const prev = getLastReadingBeforeDate(r.bottle_id, today);
             const tr = document.createElement('tr');
 
             let prevText = 'No previous count';
