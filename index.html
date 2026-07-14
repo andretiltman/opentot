@@ -216,6 +216,10 @@
     <div class="search-box">
         <h2>OpenTot</h2>
 
+        <label for="tradingDate" style="font-size: 12px; color: var(--muted); display:block; margin-top:0;">Trading Date</label>
+        <input type="date" id="tradingDate" />
+        <p style="font-size: 12px; color: var(--muted); margin-top: -10px;">Defaults to today - change this if you're counting stock after midnight for a shift that started the day before.</p>
+
         <div class="input-group">
             <input type="text" id="name" placeholder="Bottle name or barcode" oninput="checkOpticsNeeded()" onchange="checkOpticsNeeded()" />
             <button type="button" class="scan-btn" onclick="toggleScanner('search')" id="scanToggleBtn-search">Scan</button>
@@ -504,6 +508,7 @@
 
         document.getElementById('status').innerText = 'Database ready (stored on this device)';
         document.getElementById('keepHistoryToggle').checked = keepHistoryEnabled();
+        document.getElementById('tradingDate').value = todayStr();
         renderBottleTable();
         renderDailySummary();
         renderHistorySelect();
@@ -1313,7 +1318,11 @@
         // Look up the most recent count before now (could be earlier today, e.g.
         // day shift vs night shift, or an earlier day), then save this count as
         // its own record - it never overwrites an earlier count from today.
-        const { date, time } = nowParts();
+        // The trading date defaults to today but can be wound back a day, e.g.
+        // for a stock count done in the early hours after a late night shift.
+        const { time } = nowParts();
+        const tradingDateVal = document.getElementById('tradingDate').value;
+        const date = tradingDateVal || todayStr();
         const previous = getPreviousReading(bottle.id, time);
         await recordReading(bottle.id, adjustedWeight, totsRemaining, date, time);
 
