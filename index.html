@@ -800,26 +800,29 @@
             let soldTodayText = '-';
             let soldSinceText = '-';
             let lossText = '-';
-            let soldSince = null;
+            let soldToday = null;
             let swapped = false;
 
             if (dayPrev) {
                 prevText = dayPrev.tots_remaining.toFixed(1) + ' (' + dayPrev.reading_date + ' ' + formatTime(dayPrev.reading_time) + ')';
                 const computed = computeSold(dayPrev.tots_remaining, r.today_tots, r.tots_capacity);
-                soldTodayText = computed.sold.toFixed(1);
+                soldToday = computed.sold;
+                soldTodayText = soldToday.toFixed(1);
                 swapped = swapped || computed.changed;
             }
 
             if (sinceLastPrev) {
                 const computed = computeSold(sinceLastPrev.tots_remaining, r.today_tots, r.tots_capacity);
-                soldSince = computed.sold;
-                soldSinceText = soldSince.toFixed(1);
+                soldSinceText = computed.sold.toFixed(1);
                 swapped = swapped || computed.changed;
             }
 
+            // Actual Sales is a running total (e.g. till total for the day), so it's
+            // compared against Sold (Today) - the total since the preceding day's
+            // close - not the since-last-count figure, which only covers this shift.
             const salesVal = (r.sales_qty !== null && r.sales_qty !== undefined) ? r.sales_qty : '';
-            if (soldSince !== null && salesVal !== '') {
-                lossText = (soldSince - salesVal).toFixed(1);
+            if (soldToday !== null && salesVal !== '') {
+                lossText = (soldToday - salesVal).toFixed(1);
             }
 
             tr.innerHTML = `
@@ -1002,11 +1005,13 @@
             let soldTodayText = '-';
             let soldSinceText = '-';
             let lossText = '-';
+            let soldToday = null;
             let swapped = false;
 
             if (dayPrev) {
                 const computed = computeSold(dayPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
-                soldTodayText = computed.sold.toFixed(1);
+                soldToday = computed.sold;
+                soldTodayText = soldToday.toFixed(1);
                 swapped = swapped || computed.changed;
             }
 
@@ -1014,9 +1019,13 @@
                 const computed = computeSold(sinceLastPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
                 soldSinceText = computed.sold.toFixed(1);
                 swapped = swapped || computed.changed;
-                if (r.sales_qty !== null && r.sales_qty !== undefined) {
-                    lossText = (computed.sold - r.sales_qty).toFixed(1);
-                }
+            }
+
+            // Actual Sales is a running total (e.g. till total for the day), so it's
+            // compared against Sold (Today) - the total since the preceding day's
+            // close - not the since-last-count figure, which only covers this shift.
+            if (soldToday !== null && r.sales_qty !== null && r.sales_qty !== undefined) {
+                lossText = (soldToday - r.sales_qty).toFixed(1);
             }
 
             const tr = document.createElement('tr');
