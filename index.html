@@ -708,6 +708,26 @@
         );
     }
 
+    // A negative "sold" means the bottle itself was swapped out (a fresh/fuller
+    // bottle replaced one that wasn't empty yet), not that sales were negative.
+    // In that case there's no meaningful comparison to the previous bottle's
+    // level, so fall back to measuring against a full bottle instead and flag
+    // it so the figure isn't mistaken for a real negative sale.
+    function computeSold(prevTotsRemaining, currentTotsRemaining, totsCapacity) {
+        let sold = prevTotsRemaining - currentTotsRemaining;
+        let changed = false;
+        if (sold < 0) {
+            sold = totsCapacity - currentTotsRemaining;
+            changed = true;
+        }
+        return { sold, changed };
+    }
+
+    function formatSold(prevTotsRemaining, currentTotsRemaining, totsCapacity) {
+        const { sold, changed } = computeSold(prevTotsRemaining, currentTotsRemaining, totsCapacity);
+        return sold.toFixed(1) + (changed ? ' (changed)' : '');
+    }
+
     async function recordReading(bottleId, currentWeight, totsRemaining, date, time) {
         db.run(
             `INSERT INTO readings (bottle_id, reading_date, reading_time, current_weight, tots_remaining)
@@ -750,7 +770,7 @@
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
-            `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, r.sales_qty, b.name
+            `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, r.sales_qty, b.name, b.tots_capacity
              FROM readings r JOIN bottles b ON b.id = r.bottle_id
              WHERE r.reading_date = :d
              AND r.reading_time = (
@@ -782,8 +802,9 @@
 
             if (prev) {
                 prevText = prev.tots_remaining.toFixed(1) + ' (' + prev.reading_date + ' ' + formatTime(prev.reading_time) + ')';
-                sold = prev.tots_remaining - r.today_tots;
-                soldText = sold.toFixed(1);
+                const computed = computeSold(prev.tots_remaining, r.today_tots, r.tots_capacity);
+                sold = computed.sold;
+                soldText = sold.toFixed(1) + (computed.changed ? ' (changed)' : '');
             }
 
             const salesVal = (r.sales_qty !== null && r.sales_qty !== undefined) ? r.sales_qty : '';
@@ -949,6 +970,7 @@
         }
 
         const bottleId = parseInt(select.value);
+        const bottle = queryOne(`SELECT * FROM bottles WHERE id = :id`, { ':id': bottleId });
         const rows = queryAll(
             `SELECT * FROM readings WHERE bottle_id = :b ORDER BY reading_time DESC`,
             { ':b': bottleId }
@@ -968,10 +990,10 @@
             let lossText = '-';
 
             if (prev) {
-                const sold = prev.tots_remaining - r.tots_remaining;
-                soldText = sold.toFixed(1);
+                const computed = computeSold(prev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
+                soldText = computed.sold.toFixed(1) + (computed.changed ? ' (changed)' : '');
                 if (r.sales_qty !== null && r.sales_qty !== undefined) {
-                    lossText = (sold - r.sales_qty).toFixed(1);
+                    lossText = (computed.sold - r.sales_qty).toFixed(1);
                 }
             }
 
@@ -1275,12 +1297,12 @@
         document.getElementById("tots").innerText = totsRemaining.toFixed(1);
 
         if (previous) {
-            const sold = previous.tots_remaining - totsRemaining;
             document.getElementById("previousCountRow").style.display = "block";
             document.getElementById("soldRow").style.display = "block";
             document.getElementById("previousCount").innerText =
                 previous.tots_remaining.toFixed(1) + ' (on ' + previous.reading_date + ' ' + formatTime(previous.reading_time) + ')';
-            document.getElementById("soldSinceLast").innerText = sold.toFixed(1) + ' tots';
+            document.getElementById("soldSinceLast").innerText =
+                formatSold(previous.tots_remaining, totsRemaining, bottle.tots_capacity) + ' tots';
         } else {
             document.getElementById("previousCountRow").style.display = "block";
             document.getElementById("soldRow").style.display = "block";
