@@ -363,7 +363,7 @@
         <p id="summaryEmpty" style="font-size:13px; color:var(--muted);">No bottles checked yet today.</p>
         <table id="summaryTable">
             <thead>
-                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Actual Sales</th><th>Loss</th></tr>
+                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Bottle Swapped</th><th>Actual Sales</th><th>Loss</th></tr>
             </thead>
             <tbody id="summaryTableBody"></tbody>
         </table>
@@ -379,7 +379,7 @@
             <select id="historyBottleSelect" onchange="renderHistoryTable()"></select>
             <table id="historyTable" style="display:none;">
                 <thead>
-                    <tr><th>Date</th><th>Weight</th><th>Tots</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Actual Sales</th><th>Loss</th></tr>
+                    <tr><th>Date</th><th>Weight</th><th>Tots</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Bottle Swapped</th><th>Actual Sales</th><th>Loss</th></tr>
                 </thead>
                 <tbody id="historyTableBody"></tbody>
             </table>
@@ -801,17 +801,20 @@
             let soldSinceText = '-';
             let lossText = '-';
             let soldSince = null;
+            let swapped = false;
 
             if (dayPrev) {
                 prevText = dayPrev.tots_remaining.toFixed(1) + ' (' + dayPrev.reading_date + ' ' + formatTime(dayPrev.reading_time) + ')';
                 const computed = computeSold(dayPrev.tots_remaining, r.today_tots, r.tots_capacity);
-                soldTodayText = computed.sold.toFixed(1) + (computed.changed ? ' (changed)' : '');
+                soldTodayText = computed.sold.toFixed(1);
+                swapped = swapped || computed.changed;
             }
 
             if (sinceLastPrev) {
                 const computed = computeSold(sinceLastPrev.tots_remaining, r.today_tots, r.tots_capacity);
                 soldSince = computed.sold;
-                soldSinceText = soldSince.toFixed(1) + (computed.changed ? ' (changed)' : '');
+                soldSinceText = soldSince.toFixed(1);
+                swapped = swapped || computed.changed;
             }
 
             const salesVal = (r.sales_qty !== null && r.sales_qty !== undefined) ? r.sales_qty : '';
@@ -825,6 +828,7 @@
                 <td>${r.today_tots.toFixed(1)}</td>
                 <td>${soldTodayText}</td>
                 <td>${soldSinceText}</td>
+                <td style="text-align:center;"><input type="checkbox" disabled ${swapped ? 'checked' : ''} /></td>
                 <td><input type="number" value="${salesVal}" placeholder="tots" style="width:70px; margin:0; padding:4px;" onchange="updateSummarySales(${r.id}, this.value)" /></td>
                 <td>${lossText}</td>
             `;
@@ -998,15 +1002,18 @@
             let soldTodayText = '-';
             let soldSinceText = '-';
             let lossText = '-';
+            let swapped = false;
 
             if (dayPrev) {
                 const computed = computeSold(dayPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
-                soldTodayText = computed.sold.toFixed(1) + (computed.changed ? ' (changed)' : '');
+                soldTodayText = computed.sold.toFixed(1);
+                swapped = swapped || computed.changed;
             }
 
             if (sinceLastPrev) {
                 const computed = computeSold(sinceLastPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
-                soldSinceText = computed.sold.toFixed(1) + (computed.changed ? ' (changed)' : '');
+                soldSinceText = computed.sold.toFixed(1);
+                swapped = swapped || computed.changed;
                 if (r.sales_qty !== null && r.sales_qty !== undefined) {
                     lossText = (computed.sold - r.sales_qty).toFixed(1);
                 }
@@ -1019,6 +1026,7 @@
                 <td>${r.tots_remaining.toFixed(1)}</td>
                 <td>${soldTodayText}</td>
                 <td>${soldSinceText}</td>
+                <td style="text-align:center;"><input type="checkbox" disabled ${swapped ? 'checked' : ''} /></td>
                 <td>${r.sales_qty !== null && r.sales_qty !== undefined ? r.sales_qty : '-'}</td>
                 <td>${lossText}</td>
             `;
