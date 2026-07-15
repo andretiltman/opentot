@@ -367,7 +367,7 @@
         <p id="summaryEmpty" style="font-size:13px; color:var(--muted);">No bottles checked yet today.</p>
         <table id="summaryTable">
             <thead>
-                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Bottle Swapped</th><th>Actual Sales</th><th>Loss</th></tr>
+                <tr><th>Bottle</th><th>Previous</th><th>Today</th><th>Sold (Since last count)</th></tr>
             </thead>
             <tbody id="summaryTableBody"></tbody>
         </table>
@@ -383,7 +383,7 @@
             <select id="historyBottleSelect" onchange="renderHistoryTable()"></select>
             <table id="historyTable" style="display:none;">
                 <thead>
-                    <tr><th>Date</th><th>Weight</th><th>Tots</th><th>Sold (Today)</th><th>Sold (Since last count)</th><th>Bottle Swapped</th><th>Actual Sales</th><th>Loss</th></tr>
+                    <tr><th>Date</th><th>Weight</th><th>Tots</th><th>Sold (Since last count)</th></tr>
                 </thead>
                 <tbody id="historyTableBody"></tbody>
             </table>
@@ -701,36 +701,12 @@
         );
     }
 
-    // Today's Sales needs the stock level the day *started* at, not just
-    // whatever reading happened to come before it - a stock take can happen
-    // at any time of day, so "the previous reading" might itself be from
-    // earlier today. This looks back to the last reading from a prior day
-    // (skipping back further if the previous day had no reading at all).
-    function getLastReadingBeforeDate(bottleId, date) {
-        return queryOne(
-            `SELECT * FROM readings WHERE bottle_id = :b AND reading_date < :d ORDER BY reading_date DESC, reading_time DESC LIMIT 1`,
-            { ':b': bottleId, ':d': date }
-        );
+    function computeSold(prevTotsRemaining, currentTotsRemaining) {
+        return prevTotsRemaining - currentTotsRemaining;
     }
 
-    // A negative "sold" means the bottle itself was swapped out (a fresh/fuller
-    // bottle replaced one that wasn't empty yet), not that sales were negative.
-    // In that case there's no meaningful comparison to the previous bottle's
-    // level, so fall back to measuring against a full bottle instead and flag
-    // it so the figure isn't mistaken for a real negative sale.
-    function computeSold(prevTotsRemaining, currentTotsRemaining, totsCapacity) {
-        let sold = prevTotsRemaining - currentTotsRemaining;
-        let changed = false;
-        if (sold < 0) {
-            sold = totsCapacity - currentTotsRemaining;
-            changed = true;
-        }
-        return { sold, changed };
-    }
-
-    function formatSold(prevTotsRemaining, currentTotsRemaining, totsCapacity) {
-        const { sold, changed } = computeSold(prevTotsRemaining, currentTotsRemaining, totsCapacity);
-        return sold.toFixed(1) + (changed ? ' (changed)' : '');
+    function formatSold(prevTotsRemaining, currentTotsRemaining) {
+        return computeSold(prevTotsRemaining, currentTotsRemaining).toFixed(1);
     }
 
     async function recordReading(bottleId, currentWeight, totsRemaining, date, time) {
@@ -752,30 +728,13 @@
         await persist();
     }
 
-    // Actual sales are entered manually (e.g. from a till/POS) so the
-    // weight-calculated "sold" figure can be checked for a loss (spillage,
-    // over-pouring, theft) - loss = calculated sold minus actual sales.
-    // Keyed by reading id, not bottle+date, since a bottle can have more
-    // than one reading (and more than one sales figure) on the same day.
-    async function updateSummarySales(readingId, value) {
-        const val = parseFloat(value);
-        const salesQty = isNaN(val) ? null : val;
-        db.run(`UPDATE readings SET sales_qty = ? WHERE id = ?`, [salesQty, readingId]);
-        await persist();
-        renderDailySummary();
-        renderHistoryTable();
-    }
-
     // Shows just each bottle's most recent count for today - if day and
     // night shift both counted it, only the latest appears here (earlier
     // counts from today are still kept and viewable under History).
-    // "Sold" is measured against the last reading from a previous day, not
-    // an earlier count from today, since a stock take can happen at any
-    // time of day.
     function renderDailySummary() {
         const today = todayStr();
         const rows = queryAll(
-            `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, r.sales_qty, b.name, b.tots_capacity
+            `SELECT r.id, r.bottle_id, r.reading_time, r.tots_remaining as today_tots, b.name
              FROM readings r JOIN bottles b ON b.id = r.bottle_id
              WHERE r.reading_date = :d
              AND r.reading_time = (
@@ -797,48 +756,22 @@
         emptyMsg.style.display = 'none';
 
         rows.forEach(r => {
-            const dayPrev = getLastReadingBeforeDate(r.bottle_id, today);
-            const sinceLastPrev = getPreviousReading(r.bottle_id, r.reading_time);
+            const prev = getPreviousReading(r.bottle_id, r.reading_time);
             const tr = document.createElement('tr');
 
             let prevText = 'No previous count';
-            let soldTodayText = '-';
-            let soldSinceText = '-';
-            let lossText = '-';
-            let soldToday = null;
-            let swapped = false;
+            let soldText = '-';
 
-            if (dayPrev) {
-                prevText = dayPrev.tots_remaining.toFixed(1) + ' (' + dayPrev.reading_date + ' ' + formatTime(dayPrev.reading_time) + ')';
-                const computed = computeSold(dayPrev.tots_remaining, r.today_tots, r.tots_capacity);
-                soldToday = computed.sold;
-                soldTodayText = soldToday.toFixed(1);
-                swapped = swapped || computed.changed;
-            }
-
-            if (sinceLastPrev) {
-                const computed = computeSold(sinceLastPrev.tots_remaining, r.today_tots, r.tots_capacity);
-                soldSinceText = computed.sold.toFixed(1);
-                swapped = swapped || computed.changed;
-            }
-
-            // Actual Sales is a running total (e.g. till total for the day), so it's
-            // compared against Sold (Today) - the total since the preceding day's
-            // close - not the since-last-count figure, which only covers this shift.
-            const salesVal = (r.sales_qty !== null && r.sales_qty !== undefined) ? r.sales_qty : '';
-            if (soldToday !== null && salesVal !== '') {
-                lossText = (soldToday - salesVal).toFixed(1);
+            if (prev) {
+                prevText = prev.tots_remaining.toFixed(1) + ' (' + prev.reading_date + ' ' + formatTime(prev.reading_time) + ')';
+                soldText = computeSold(prev.tots_remaining, r.today_tots).toFixed(1);
             }
 
             tr.innerHTML = `
                 <td>${r.name} <span style="color:var(--muted);">(${formatTime(r.reading_time)})</span></td>
                 <td>${prevText}</td>
                 <td>${r.today_tots.toFixed(1)}</td>
-                <td>${soldTodayText}</td>
-                <td>${soldSinceText}</td>
-                <td style="text-align:center;"><input type="checkbox" disabled ${swapped ? 'checked' : ''} /></td>
-                <td><input type="number" value="${salesVal}" placeholder="tots" style="width:70px; margin:0; padding:4px;" onchange="updateSummarySales(${r.id}, this.value)" /></td>
-                <td>${lossText}</td>
+                <td>${soldText}</td>
             `;
             body.appendChild(tr);
         });
@@ -990,7 +923,6 @@
         }
 
         const bottleId = parseInt(select.value);
-        const bottle = queryOne(`SELECT * FROM bottles WHERE id = :id`, { ':id': bottleId });
         const rows = queryAll(
             `SELECT * FROM readings WHERE bottle_id = :b ORDER BY reading_time DESC`,
             { ':b': bottleId }
@@ -1005,44 +937,15 @@
         table.style.display = 'table';
 
         rows.forEach((r, i) => {
-            const sinceLastPrev = rows[i + 1]; // next row is the previous reading (rows are newest-first)
-            const dayPrev = getLastReadingBeforeDate(bottleId, r.reading_date);
-            let soldTodayText = '-';
-            let soldSinceText = '-';
-            let lossText = '-';
-            let soldToday = null;
-            let swapped = false;
-
-            if (dayPrev) {
-                const computed = computeSold(dayPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
-                soldToday = computed.sold;
-                soldTodayText = soldToday.toFixed(1);
-                swapped = swapped || computed.changed;
-            }
-
-            if (sinceLastPrev) {
-                const computed = computeSold(sinceLastPrev.tots_remaining, r.tots_remaining, bottle.tots_capacity);
-                soldSinceText = computed.sold.toFixed(1);
-                swapped = swapped || computed.changed;
-            }
-
-            // Actual Sales is a running total (e.g. till total for the day), so it's
-            // compared against Sold (Today) - the total since the preceding day's
-            // close - not the since-last-count figure, which only covers this shift.
-            if (soldToday !== null && r.sales_qty !== null && r.sales_qty !== undefined) {
-                lossText = (soldToday - r.sales_qty).toFixed(1);
-            }
+            const prev = rows[i + 1]; // next row is the previous reading (rows are newest-first)
+            const soldText = prev ? computeSold(prev.tots_remaining, r.tots_remaining).toFixed(1) : '-';
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td>${r.reading_date} ${formatTime(r.reading_time)}</td>
                 <td>${r.current_weight}</td>
                 <td>${r.tots_remaining.toFixed(1)}</td>
-                <td>${soldTodayText}</td>
-                <td>${soldSinceText}</td>
-                <td style="text-align:center;"><input type="checkbox" disabled ${swapped ? 'checked' : ''} /></td>
-                <td>${r.sales_qty !== null && r.sales_qty !== undefined ? r.sales_qty : '-'}</td>
-                <td>${lossText}</td>
+                <td>${soldText}</td>
             `;
             body.appendChild(tr);
         });
@@ -1344,7 +1247,7 @@
             document.getElementById("previousCount").innerText =
                 previous.tots_remaining.toFixed(1) + ' (on ' + previous.reading_date + ' ' + formatTime(previous.reading_time) + ')';
             document.getElementById("soldSinceLast").innerText =
-                formatSold(previous.tots_remaining, totsRemaining, bottle.tots_capacity) + ' tots';
+                formatSold(previous.tots_remaining, totsRemaining) + ' tots';
         } else {
             document.getElementById("previousCountRow").style.display = "block";
             document.getElementById("soldRow").style.display = "block";
