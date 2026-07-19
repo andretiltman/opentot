@@ -474,6 +474,67 @@
         await idbSet(IDB_KEY, bytes);
     }
 
+    // Seeds a freshly created (empty) database with the bar's known bottle
+    // list, so a new install isn't a blank "Manage Bottles" screen. Only
+    // ever called right after CREATE TABLE bottles, never against an
+    // existing database - it must not clobber a bar's own saved data.
+    function seedBottles() {
+        const bottles = [
+                ['Cola Tonic', 1306, 459, 30],
+                ['Lime Cordial (Bottle)', 1242, 453, 30],
+                ['Passion Fruit (Plastic)', 850, 65, 30],
+                ['Grenadine', 1020, 65, 30],
+                ['Amarula', 1446, 646, 30],
+                ['Banana Liq', 1368, 560, 30],
+                ['Blue Curacao', 1368, 560, 30],
+                ['Peppermint Liq', 1400, 560, 30],
+                ['Triple Sec', 1368, 560, 30],
+                ['Kahlua', 1263, 434, 30],
+                ['Melktert', 1299, 532, 30],
+                ['Peach Schnapps', 1294, 504, 30],
+                ['Strawberry Lips', 1316, 563, 30],
+                ['Apple Sours', 1316, 555, 30],
+                ['Cactus Jack', 1466, 664, 30],
+                ['Malibu', 1254, 485, 30],
+                ['Bacardi', 1180, 476, 30],
+                ['Jose Cuervo Silver', 1238, 535, 30],
+                ['Jameson', 1225, 522, 30],
+                ["Gordon's Gin", 1246, 546, 30],
+                ["Gordon's Gin 1L", 1614, 546, 30],
+                ['Pushkin Vodka', 1196, 378, 30],
+                ['Smirnoff Vodka', 1085, 378, 30],
+                ['Strettons Pink', 1299, 544, 30],
+                ['tanqueray', 1284, 573, 30],
+                ['Tanquery Sevilla', 1284, 579, 30],
+                ['Old Brown Sherry', 1277, 495, 30],
+                ['Bells', 1133, 425, 30],
+                ['Harrier', 1095, 390, 30],
+                ['Jack Daniels', 1194, 481, 30],
+                ['Johny Walker Black Label', 1113, 395, 30],
+                ['Johny Walker Red Label', 1115, 395, 30],
+                ['Southern Comfort', 1218, 462, 30],
+                ['Captain Morgan Dark Rum', 1165, 451, 30],
+                ['Captain Morgan Spiced Gold', 1165, 451, 30],
+                ['Red Heart', 1230, 521, 30],
+                ['Klipdrift', 1138, 495, 30],
+                ['KWV 3 Year', 1219, 504, 30],
+                ['CARAMEL VODKA', 881, 95, 30],
+                ['Black Sambuca', 1453, 655, 30],
+                ['Jose Cuervo Gold', 1233, 529, 30],
+                ['Olmeca Black Teq', 1351, 634, 30],
+                ['jagermeister 750mls', 1370, 635, 30],
+                ['Jagermeister 1L', 1769, 730, 40],
+                ['KWV 5 Year', 1219, 504, 30],
+                ['Olof Berg', 1105, 409, 30],
+                ['PO10C', 1200, 450, 30],
+                ['Fireball', 1300, 450, 30],
+                ['Hennesey VS', 1229, 553, 30],
+        ];
+        const stmt = db.prepare(`INSERT INTO bottles (name, full_weight, empty_weight, tots_capacity) VALUES (?, ?, ?, ?)`);
+        for (const bottle of bottles) stmt.run(bottle);
+        stmt.free();
+    }
+
     async function initDb() {
         SQL = await initSqlJs({
             locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
@@ -497,6 +558,7 @@
                     optic_weight REAL NOT NULL DEFAULT 76
                 );
             `);
+            seedBottles();
         }
 
         ensureSchema();
