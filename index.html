@@ -1249,11 +1249,9 @@
         const fullAlcoholWeight = bottle.full_weight - bottle.empty_weight;
         const remainingAlcoholWeight = adjustedWeight - bottle.empty_weight;
 
-        let percentageRemaining = (remainingAlcoholWeight / fullAlcoholWeight) * 100;
         let totsRemaining = (remainingAlcoholWeight / fullAlcoholWeight) * bottle.tots_capacity;
 
         // Clamp to sane bounds in case of a scale reading below empty or above full
-        percentageRemaining = Math.max(0, Math.min(100, percentageRemaining));
         totsRemaining = Math.max(0, Math.min(bottle.tots_capacity, totsRemaining));
 
         // Look up the most recent count before now (could be earlier today, e.g.
@@ -1267,13 +1265,6 @@
         document.getElementById("resultCard").style.display = "block";
 
         document.getElementById("productName").innerText = bottle.name;
-        document.getElementById("currentWeight").innerText =
-            opticWeightUsed !== null
-                ? currentWeight + ' (optic ' + opticWeightUsed + 'g subtracted = ' + adjustedWeight.toFixed(1) + ')'
-                : currentWeight;
-        document.getElementById("fullWeight").innerText = bottle.full_weight;
-        document.getElementById("emptyWeight").innerText = bottle.empty_weight;
-        document.getElementById("percentage").innerText = percentageRemaining.toFixed(1) + "%";
         document.getElementById("tots").innerText = totsRemaining.toFixed(1);
 
         if (previous) {
